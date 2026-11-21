@@ -146,6 +146,18 @@ def _user_from_token(token: str) -> dict | None:
         return _public_user(user, client_name)
 
 
+def _actor_for_user_id(user_id: int) -> dict:
+    with db_session() as session:
+        user = session.get(User, user_id)
+        if not user or not user.active:
+            raise HTTPException(status_code=403, detail="Export not allowed.")
+        client_name = ""
+        if user.client_id:
+            client = session.get(Client, user.client_id)
+            client_name = client.name if client else ""
+        return _public_user(user, client_name)
+
+
 @app.middleware("http")
 async def require_sign_in(request: Request, call_next):
     user = None
@@ -922,7 +934,18 @@ def export_by_token(token: str):
     entry = _export_links.pop(token, None)
     if not entry or entry["expires"] < time.time():
         raise HTTPException(status_code=404, detail="This download link expired. Tap Save again.")
-    return _export_response(entry["kind"], entry["job_id"], entry["scope"], entry.get("page"), entry.get("work_area"))
+    export_user = _actor_for_user_id(entry["user_id"])
+    token_ctx = _actor.set(export_user)
+    try:
+        return _export_response(
+            entry["kind"],
+            entry["job_id"],
+            entry["scope"],
+            entry.get("page"),
+            entry.get("work_area"),
+        )
+    finally:
+        _actor.reset(token_ctx)
 
 
 @app.get("/api/jobs/{job_id}/export.csv")
