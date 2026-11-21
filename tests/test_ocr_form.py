@@ -1,9 +1,11 @@
+from unittest.mock import patch
+
 import io
 
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.pdfgen import canvas
 
-from app.ocr_pipeline import tesseract_table
+from app.ocr_pipeline import read_document
 
 
 def _sheet() -> bytes:
@@ -28,20 +30,31 @@ def _sheet() -> bytes:
     return buffer.getvalue()
 
 
-def test_tesseract_reads_printed_balloons_and_block_digits():
-    import pymupdf
-    from PIL import Image
+def test_read_document_requires_api_key():
+    try:
+        read_document(_sheet(), "test.pdf", [], "report")
+        assert False, "expected missing key"
+    except ValueError as exc:
+        assert "Anthropic API key" in str(exc)
 
-    document = pymupdf.open(stream=_sheet(), filetype="pdf")
-    page = document[0]
-    pixmap = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
-    image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-    document.close()
-    draft = tesseract_table(image)
-    assert draft["warning"] is None, draft
-    balloons = {row["balloon_no"] for row in draft["rows"]}
-    assert "1" in balloons
-    assert "2" in balloons
-    readings = " ".join(f"{row.get('m1', '')} {row.get('m2', '')}" for row in draft["rows"])
-    assert "120.05" in readings
-    assert "10.02" in readings
+
+def test_read_document_uses_claude_rows():
+    sample_rows = [
+        {
+            "balloon_no": "1",
+            "nominal": "120",
+            "m1": "120.05",
+            "m2": "120.08",
+            "m1_confident": True,
+            "m2_confident": True,
+        }
+    ]
+    with patch("app.ocr_pipeline.anthropic_config", return_value=("test-key", "claude-sonnet-5-5", "env")):
+        with patch(
+            "app.ocr_pipeline.claude_read",
+            return_value={"rows": sample_rows, "meta": {}, "warning": None},
+        ):
+            result = read_document(_sheet(), "test.pdf", [], "report")
+    assert result["rows"]
+    assert result["rows"][0]["balloon_no"] == "1"
+    assert result["rows"][0]["m1"] == "120.05"

@@ -1,9 +1,4 @@
-"""Read a photographed inspection table.
-
-Tesseract is the server OCR. Printed balloon numbers and neat block digits
-usually come back. Claude checks those readings against the page. Cursive or
-disputed cells are left blank so someone can type them.
-"""
+"""Read a photographed inspection table with Claude vision."""
 
 from __future__ import annotations
 
@@ -53,38 +48,6 @@ def anthropic_config() -> tuple[str | None, str, str]:
     return key, model, source
 
 
-def configure_tesseract() -> str | None:
-    import pytesseract
-
-    cmd = os.environ.get("TESSERACT_CMD", "").strip()
-    candidates = [
-        cmd,
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-    ]
-    for candidate in candidates:
-        if candidate and Path(candidate).exists():
-            pytesseract.pytesseract.tesseract_cmd = candidate
-            tessdata = Path(candidate).parent / "tessdata"
-            if (tessdata / "eng.traineddata").exists():
-                os.environ["TESSDATA_PREFIX"] = str(tessdata)
-            return candidate
-    return None
-
-
-def tesseract_status() -> dict:
-    try:
-        import pytesseract
-    except ImportError:
-        return {"ok": False, "version": None, "error": "pytesseract is not installed"}
-    configure_tesseract()
-    try:
-        version = str(pytesseract.get_tesseract_version())
-        return {"ok": True, "version": version, "cmd": pytesseract.pytesseract.tesseract_cmd}
-    except Exception as exc:  # pragma: no cover - depends on the machine
-        return {"ok": False, "version": None, "error": str(exc)}
-
-
 def load_images(payload: bytes, filename: str) -> list[Image.Image]:
     suffix = Path(filename or "").suffix.lower()
     if suffix == ".pdf" or payload[:4] == b"%PDF":
@@ -122,218 +85,19 @@ def _prepare(image: Image.Image) -> Image.Image:
     return image
 
 
-def _ocr_image(image: Image.Image):
-    import pytesseract
-
-    configure_tesseract()
-    gray = ImageOps.autocontrast(ImageOps.grayscale(image))
-    if gray.width < 1400:
-        scale = 1400 / gray.width
-        gray = gray.resize((int(gray.width * scale), int(gray.height * scale)), Image.Resampling.LANCZOS)
-    config = "--psm 6"
-    text = pytesseract.image_to_string(gray, config=config)
-    data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT, config=config)
-    return text, data, gray.width
-
-
-def tesseract_table(image: Image.Image) -> dict:
-    status = tesseract_status()
-    if not status["ok"]:
-        return {"rows": [], "text": "", "warning": status.get("error") or "Tesseract is not available"}
-    try:
-        text, data, width = _ocr_image(image)
-    except Exception as exc:
-        return {"rows": [], "text": "", "warning": f"Tesseract failed: {exc}"}
-    rows = _rows_from_tsv(data, width)
-    return {"rows": rows, "text": text, "warning": None}
-
-
-def _rows_from_tsv(data: dict, width: int) -> list[dict]:
-    grouped: dict[tuple, list[dict]] = {}
-    count = len(data.get("text") or [])
-    for index in range(count):
-        text = (data["text"][index] or "").strip()
-        if not text:
-            continue
-        try:
-            conf = float(data["conf"][index])
-        except (TypeError, ValueError):
-            conf = -1
-        if conf < 0:
-            continue
-        key = (data["block_num"][index], data["par_num"][index], data["line_num"][index])
-        grouped.setdefault(key, []).append(
-            {
-                "text": text,
-                "conf": conf,
-                "left": int(data["left"][index]),
-                "top": int(data["top"][index]),
-                "right": int(data["left"][index]) + int(data["width"][index]),
-            }
-        )
-    lines = []
-    for words in grouped.values():
-        words.sort(key=lambda word: word["left"])
-        top = min(word["top"] for word in words)
-        lines.append({"top": top, "words": words, "text": " ".join(word["text"] for word in words)})
-    lines.sort(key=lambda line: line["top"])
-
-    header_index = None
-    columns = None
-    for index, line in enumerate(lines):
-        columns = _header_columns(line["words"], width)
-        if columns and "balloon_no" in columns and ({"m1", "nominal", "characteristic"} & set(columns)):
-            header_index = index
-            break
-    if header_index is None or not columns:
-        return []
-
-    rows = []
-    order = sorted(columns, key=lambda name: columns[name][0])
-    for line in lines[header_index + 1 :]:
-        if _looks_like_header(line["text"]):
-            continue
-        cells = {name: [] for name in columns}
-        for word in line["words"]:
-            center = (word["left"] + word["right"]) / 2
-            owner = _column_at(columns, center)
-            if owner:
-                cells[owner].append(word)
-        balloon = " ".join(word["text"] for word in cells.get("balloon_no", [])).strip()
-        if not balloon or not re.search(r"[A-Za-z0-9]", balloon):
-            continue
-        if balloon_key(balloon) in {"BALLOON", "CHARACTERISTIC", "NOMINAL"}:
-            continue
-        row = {
-            "balloon_no": balloon,
-            "characteristic": _join(cells, "characteristic"),
-            "nominal": _join(cells, "nominal"),
-            "tol_plus": _join(cells, "tol_plus"),
-            "tol_minus": _join(cells, "tol_minus"),
-            "tol": _join(cells, "tol"),
-            "unit": _join(cells, "unit"),
-            "instrument": _join(cells, "instrument"),
-            "instrument_id": _join(cells, "instrument_id"),
-            "m1": _join(cells, "m1"),
-            "m2": _join(cells, "m2"),
-            "result": _join(cells, "result"),
-            "m1_confident": _cell_confident(cells, "m1"),
-            "m2_confident": _cell_confident(cells, "m2"),
-        }
-        rows.append(row)
-    return rows
-
-
-def _join(cells: dict, name: str) -> str:
-    return " ".join(word["text"] for word in cells.get(name, [])).strip()
-
-
-def _cell_confident(cells: dict, name: str) -> bool:
-    words = cells.get(name) or []
-    if not words:
-        return False
-    if min(word["conf"] for word in words) < 70:
-        return False
-    text = " ".join(word["text"] for word in words)
-    return bool(re.search(r"\d", text))
-
-
-def _looks_like_header(text: str) -> bool:
-    lowered = text.lower()
-    return "balloon" in lowered and ("m1" in lowered or "nominal" in lowered)
-
-
-def _header_columns(words: list[dict], width: int) -> dict[str, tuple[float, float]] | None:
-    labeled: list[tuple[str, float, float]] = []
-    index = 0
-    while index < len(words):
-        token = words[index]["text"]
-        nxt = words[index + 1]["text"] if index + 1 < len(words) else ""
-        pair = f"{token} {nxt}".lower().replace(".", "")
-        single = token.lower().replace(".", "")
-        name = None
-        span = 1
-        if single == "tol" and nxt.startswith("+"):
-            name = "tol_plus"
-            span = 2
-        elif single == "tol" and nxt[:1] in {"-", "−"}:
-            name = "tol_minus"
-            span = 2
-        elif pair in {"sl no", "si no", "s no"} or single in {"sl", "si"} and nxt.lower().startswith("no"):
-            name = "balloon_no"
-            span = 2
-        elif pair in {"instr id", "instrument id", "gage id", "gauge id"} or single in {"instr"} and nxt.lower().startswith("id"):
-            name = "instrument_id"
-            span = 2
-        elif single in {"m1", "m2", "unit", "nominal", "balloon"}:
-            name = {"balloon": "balloon_no"}.get(single, single)
-        elif single in {"tol+", "+tol"} or single.replace(" ", "") in {"tol+"}:
-            name = "tol_plus"
-        elif single in {"tol-", "-tol"}:
-            name = "tol_minus"
-        elif single in {"tol", "tolerance"}:
-            name = "tol"
-        elif single in {"t/w", "tw", "(t/w)"}:
-            name = "m1"
-        elif single in {"f/w", "fw", "(f/w)"}:
-            name = "m2"
-        elif single in {"result", "remarks", "remark"}:
-            name = "result"
-        elif single in {"instrument", "instr", "gage", "gauge"}:
-            name = "instrument"
-        elif single in {"dim", "dimension"}:
-            name = "nominal"
-        elif single in {"characteristic", "description", "requirement", "parameter"}:
-            name = "characteristic"
-        elif pair.startswith("tol +") or token.lower() in {"tol+"}:
-            name = "tol_plus"
-        if name:
-            end_word = words[index + span - 1]
-            labeled.append((name, words[index]["left"], end_word["right"]))
-            index += span
-        else:
-            index += 1
-    if not labeled:
-        return None
-    labeled.sort(key=lambda item: item[1])
-    # Drop duplicate names, keeping the first occurrence.
-    seen = set()
-    unique = []
-    for item in labeled:
-        if item[0] in seen:
-            continue
-        seen.add(item[0])
-        unique.append(item)
-    columns = {}
-    for index, (name, left, right) in enumerate(unique):
-        prev_right = unique[index - 1][2] if index else 0
-        next_left = unique[index + 1][1] if index + 1 < len(unique) else width
-        start = 0 if index == 0 else (prev_right + left) / 2
-        end = width if index + 1 == len(unique) else (right + next_left) / 2
-        columns[name] = (start, end)
-    return columns
-
-
-def _column_at(columns: dict[str, tuple[float, float]], center: float) -> str | None:
-    for name, (start, end) in columns.items():
-        if start <= center <= end:
-            return name
-    return None
-
-
 def _jpeg_b64(image: Image.Image) -> str:
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=85)
     return base64.standard_b64encode(buffer.getvalue()).decode("ascii")
 
 
-def claude_read(image: Image.Image, draft: dict, job_rows: list[dict], purpose: str) -> dict:
+def claude_read(image: Image.Image, job_rows: list[dict], purpose: str) -> dict:
     key, model, _source = anthropic_config()
     if not key:
         return {"rows": [], "meta": {}, "warning": "Anthropic API key is not set."}
     from anthropic import Anthropic
 
-    prompt = _prompt(draft, job_rows, purpose)
+    prompt = _prompt(job_rows, purpose)
     client = Anthropic(api_key=key)
     content = [
         {
@@ -399,7 +163,7 @@ def _parse_json(text: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
-def _prompt(draft: dict, job_rows: list[dict], purpose: str) -> str:
+def _prompt(job_rows: list[dict], purpose: str) -> str:
     known = [
         {
             "balloon_no": row.get("balloon_no"),
@@ -419,12 +183,6 @@ Purpose: {purpose}
 - report: read the printed standard and the pen measurements
 - filled: read only the pen measurements and match them to Sl no
 - plan: read the printed standard and leave m1 and m2 null
-
-Tesseract draft (printed Sl no is often right; pen is often wrong):
-{json.dumps(draft.get("rows") or [], ensure_ascii=False)}
-
-Tesseract text:
-{(draft.get("text") or "")[:5000]}
 
 Known rows already on the job. Match these Sl numbers when the print agrees:
 {json.dumps(known, ensure_ascii=False)}
@@ -457,8 +215,7 @@ Return only JSON:
       "m2": "189",
       "result": "OK",
       "m1_confident": true,
-      "m2_confident": true,
-      "disputes_tesseract": false
+      "m2_confident": true
     }}
   ]
 }}
@@ -476,52 +233,42 @@ Rules:
 - Tol "±2" means tol_plus 2 and tol_minus 2. Tol "-" means both tolerances null, and the cell still displays "-".
 - Degrees such as 30° stay numeric 30, with the degree sign removed.
 - Fill every pen cell that can be read, including OK and a hyphen. Leave a cell blank only when the pen cannot be read at all.
-- If you disagree with Tesseract, set disputes_tesseract true and keep your value only when the pen is clear.
 """
 
 
 def read_document(payload: bytes, filename: str, job_rows: list[dict], purpose: str) -> dict:
     images = load_images(payload, filename)
-    warnings = []
+    warnings: list[str] = []
     extracted: list[dict] = []
     meta = {}
-    previews = []
     key, _model, _source = anthropic_config()
+    if not key:
+        raise ValueError("Anthropic API key is not set. Super admin can add it in Settings.")
     for page_number, image in enumerate(images, start=1):
-        draft = tesseract_table(image)
-        if draft.get("warning"):
-            warnings.append(f"Page {page_number}: {draft['warning']}")
-        previews.append((draft.get("text") or "")[:1500])
-        page_rows = []
-        if key:
-            try:
-                checked = claude_read(image, draft, job_rows, purpose)
-            except Exception as exc:
-                warnings.append(f"Page {page_number}: Claude check failed ({exc}). Tesseract readings are unconfirmed.")
-                checked = {"rows": [], "meta": {}}
-            if checked.get("warning"):
-                warnings.append(checked["warning"])
-            for field, value in (checked.get("meta") or {}).items():
-                if value and not meta.get(field):
-                    meta[field] = value
-            page_rows = _prefer_claude(draft.get("rows") or [], checked.get("rows") or [])
-        else:
-            if page_number == 1:
-                warnings.append(
-                    "Anthropic API key is not set. Tesseract filled clear block digits and left anything unclear blank."
-                )
-            page_rows = [_from_tesseract_only(row) for row in draft.get("rows") or []]
-        for row in page_rows:
+        try:
+            checked = claude_read(image, job_rows, purpose)
+        except Exception as exc:
+            warnings.append(f"Page {page_number}: Read failed ({exc}).")
+            continue
+        if checked.get("warning"):
+            warnings.append(checked["warning"])
+        for field, value in (checked.get("meta") or {}).items():
+            if value and not meta.get(field):
+                meta[field] = value
+        for raw in checked.get("rows") or []:
+            if not isinstance(raw, dict):
+                continue
+            row = _normalize_claude_row(raw)
             row.setdefault("page", page_number)
             extracted.append(row)
-    if not extracted and all(not preview.strip() for preview in previews):
+    if not extracted:
         raise ValueError("Nothing could be read. Upload the inspection table, not the ballooned drawing, and keep the photo upright.")
     return {
         "rows": extracted,
         "meta": meta,
         "warnings": _unique(warnings),
         "pages": len(images),
-        "ocr_preview": "\n\n".join(preview for preview in previews if preview.strip())[:4000],
+        "ocr_preview": "",
     }
 
 
@@ -533,109 +280,36 @@ def _unique(items: list[str]) -> list[str]:
     return seen
 
 
-def _from_tesseract_only(row: dict) -> dict:
-    """Without Claude, keep a clear block digit but do not call it confirmed."""
-    cleaned = dict(row)
-    notes = []
-    for field in ("m1", "m2"):
-        label = "T/W" if field == "m1" else "F/W"
-        if _is_hyphen(cleaned.get(field)):
-            cleaned[field] = "-"
-            cleaned[f"{field}_confident"] = True
-            continue
-        if not cleaned.get(f"{field}_confident"):
-            if cleaned.get(field):
-                notes.append(f"{label} not read")
-            cleaned[field] = ""
-        elif cleaned.get(field):
-            notes.append(f"{label} read by Tesseract — confirm the digit")
-        cleaned[f"{field}_confident"] = False
-    cleaned["sheet_result"] = _as_written(cleaned.get("result"))
-    cleaned["reader"] = "tesseract"
-    if notes:
-        cleaned["ocr_note"] = "; ".join(notes)
-    return cleaned
-
-
-def _prefer_claude(tesseract_rows: list[dict], claude_rows: list[dict]) -> list[dict]:
-    by_balloon = {}
-    for row in tesseract_rows:
-        by_balloon.setdefault(balloon_key(row.get("balloon_no")), row)
-    merged = []
-    seen = set()
-    for raw in claude_rows:
-        if not isinstance(raw, dict):
-            continue
-        balloon = raw.get("balloon_no")
-        if blank(balloon):
-            continue
-        key = balloon_key(balloon)
-        seen.add(key)
-        tess = by_balloon.get(key) or {}
-        merged.append(_merge_reading(raw, tess))
-    for row in tesseract_rows:
-        key = balloon_key(row.get("balloon_no"))
-        if key in seen:
-            continue
-        # Claude omitted it. Keep the balloon shell without unconfirmed handwriting.
-        kept = _from_tesseract_only(row)
-        kept["ocr_note"] = "Balloon seen by Tesseract only"
-        merged.append(kept)
-    return merged
-
-
-def _merge_reading(claude_row: dict, tess_row: dict) -> dict:
-    dispute = bool(claude_row.get("disputes_tesseract"))
+def _normalize_claude_row(claude_row: dict) -> dict:
     notes = []
     output = {
-        "balloon_no": str(claude_row.get("balloon_no") or tess_row.get("balloon_no") or "").strip(),
-        "page": claude_row.get("page") or tess_row.get("page"),
+        "balloon_no": _clean_cell(claude_row.get("balloon_no")),
+        "page": claude_row.get("page"),
         "work_area": _clean_cell(claude_row.get("work_area")),
-        "characteristic": _clean_cell(claude_row.get("characteristic")) or _clean_cell(tess_row.get("characteristic")),
-        "nominal": _clean_cell(claude_row.get("nominal")) or _clean_cell(tess_row.get("nominal")),
-        "tol_plus": claude_row.get("tol_plus") if claude_row.get("tol_plus") not in (None, "") else tess_row.get("tol_plus"),
-        "tol_minus": claude_row.get("tol_minus") if claude_row.get("tol_minus") not in (None, "") else tess_row.get("tol_minus"),
-        "unit": _clean_cell(claude_row.get("unit")) or _clean_cell(tess_row.get("unit")),
+        "characteristic": _clean_cell(claude_row.get("characteristic")),
+        "nominal": _clean_cell(claude_row.get("nominal")),
+        "tol_plus": claude_row.get("tol_plus"),
+        "tol_minus": claude_row.get("tol_minus"),
+        "unit": _clean_cell(claude_row.get("unit")),
         "instrument": _clean_cell(claude_row.get("instrument")),
         "instrument_id": _clean_cell(claude_row.get("instrument_id")),
         "reader": "claude",
     }
-    if not output["instrument"]:
-        output["instrument"] = _clean_cell(tess_row.get("instrument")) if not dispute else ""
-    if not output["instrument_id"]:
-        output["instrument_id"] = _clean_cell(tess_row.get("instrument_id")) if not dispute else ""
     for field in ("m1", "m2"):
-        claude_value = _clean_cell(claude_row.get(field))
-        tess_value = _clean_cell(tess_row.get(field))
+        value = _clean_cell(claude_row.get(field))
         confident = bool(claude_row.get(f"{field}_confident"))
-        if _is_hyphen(claude_value) or (not claude_value and _is_hyphen(tess_value)):
+        if _is_hyphen(value):
             output[field] = "-"
             output[f"{field}_confident"] = True
-            continue
-        if claude_value and tess_value and norm_measure(claude_value) != norm_measure(tess_value):
-            if confident:
-                output[field] = claude_value
-                output[f"{field}_confident"] = False
-                notes.append(f"{field.upper()} readers differ (sheet check {claude_value}, Tesseract {tess_value})")
-            else:
-                output[field] = ""
-                output[f"{field}_confident"] = False
-                notes.append(f"{field.upper()} not filled — Tesseract guessed {tess_value}")
-        elif claude_value:
-            output[field] = claude_value
-            output[f"{field}_confident"] = confident and not dispute
-            if dispute or not confident:
+        elif value:
+            output[field] = value
+            output[f"{field}_confident"] = confident
+            if not confident:
                 notes.append(f"{field.upper()} needs a look")
-        elif _is_hyphen(tess_value):
-            output[field] = "-"
-            output[f"{field}_confident"] = True
         else:
-            # Claude left it blank on purpose: cursive stays blank.
             output[field] = ""
             output[f"{field}_confident"] = False
-            if tess_value:
-                notes.append(f"{field.upper()} not read (Tesseract saw {tess_value})")
-    output["sheet_result"] = _as_written(claude_row.get("result")) or _as_written(tess_row.get("result"))
+    output["sheet_result"] = _as_written(claude_row.get("result"))
     if notes:
         output["ocr_note"] = "; ".join(notes)
     return output

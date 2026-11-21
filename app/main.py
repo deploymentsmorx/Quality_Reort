@@ -24,7 +24,6 @@ from app.ocr_pipeline import (
     load_settings,
     read_document,
     save_settings,
-    tesseract_status,
 )
 from app.schemas import ClientIn, DeviceIn, InstrumentIn, JobIn, LoginIn, RowIn, SaveIn, SettingsIn, TabletIn, UserIn
 from app.seal import save_seal
@@ -194,10 +193,8 @@ def index():
 def status():
     key, model, source = anthropic_config()
     info = database_info(database_url())
-    tess = tesseract_status()
     return {
         "database": info,
-        "tesseract": tess,
         "anthropic": {
             "configured": bool(key),
             "source": source,
