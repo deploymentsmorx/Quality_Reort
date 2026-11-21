@@ -147,6 +147,25 @@ class SettingsIn(BaseModel):
     anthropic_model: str = ""
 
 
+class ExportLinkIn(BaseModel):
+    kind: str
+    scope: str = "job"
+    page: int | None = None
+    work_area: str | None = None
+
+    @field_validator("kind", "scope", "work_area", mode="before")
+    @classmethod
+    def clean_export_link(cls, value):
+        return "" if value is None else str(value).strip()
+
+    @field_validator("page", mode="before")
+    @classmethod
+    def clean_page(cls, value):
+        if value is None or value == "":
+            return None
+        return int(value)
+
+
 class LoginIn(BaseModel):
     username: str
     password: str

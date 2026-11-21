@@ -473,14 +473,23 @@ function exportFileUrl(path, params) {
   return new URL(`/api/jobs/${state.job.id}/${path}?${params.toString()}`, window.location.href).href;
 }
 
-function offerTabletDownload(relativeUrl, fullUrl, filename) {
+function exportLinkPayload(kind, params) {
+  const body = { kind, scope: params.get("scope") || "job" };
+  const page = params.get("page");
+  const area = params.get("work_area");
+  if (page) body.page = Number(page);
+  if (area) body.work_area = area;
+  return body;
+}
+
+function offerTabletDownload(tokenUrl, filename) {
   const bridge = window.Android || window.IEAndroid || window.SmorxDevice;
   if (bridge && typeof bridge.downloadUrl === "function") {
-    bridge.downloadUrl(fullUrl);
+    bridge.downloadUrl(tokenUrl);
     toast("Download started…");
     return;
   }
-  state.downloadExport = { path: relativeUrl, filename, fullUrl };
+  state.downloadExport = { tokenUrl, filename, path: null, fullUrl: tokenUrl };
   $("downloadSave").textContent = `Save ${filename}`;
   $("downloadSave").disabled = false;
   $("downloadSave").hidden = false;
@@ -504,10 +513,28 @@ function showPdfSaveHelp(filename) {
 
 async function saveExportFromTap() {
   const job = state.downloadExport;
-  if (!job?.path) return;
+  if (!job?.path && !job?.tokenUrl) return;
   const bridge = window.Android || window.IEAndroid || window.SmorxDevice;
   $("downloadSave").disabled = true;
   try {
+    if (job.tokenUrl) {
+      const iframe = document.createElement("iframe");
+      iframe.setAttribute("aria-hidden", "true");
+      iframe.style.cssText = "position:fixed;left:-9999px;width:1px;height:1px;border:0";
+      iframe.src = job.tokenUrl;
+      document.body.appendChild(iframe);
+      const link = document.createElement("a");
+      link.href = job.tokenUrl;
+      link.download = job.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => iframe.remove(), 120000);
+      $("downloadHelp").textContent =
+        "Wait 10–20 seconds, then open My Files → Download. If empty, use Chrome: sign in to the same site and download again.";
+      toast("Saving — check My Files → Download");
+      return;
+    }
     const response = await fetch(job.path, { credentials: "include" });
     if (!response.ok) {
       let message = response.statusText;
@@ -581,7 +608,13 @@ async function download(path, fallback) {
   const url = `/api/jobs/${state.job.id}/${path}?${params.toString()}`;
 
   if (downloadNeedsDirectOpen()) {
-    offerTabletDownload(url, exportFileUrl(path, params), fallback);
+    const linkPayload = await api(`/api/jobs/${state.job.id}/export-link`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(exportLinkPayload(path, params)),
+    });
+    const tokenUrl = new URL(linkPayload.path, window.location.href).href;
+    offerTabletDownload(tokenUrl, fallback);
     return;
   }
 

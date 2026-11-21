@@ -3,6 +3,7 @@ from __future__ import annotations
 import platform
 import re
 import secrets
+import time
 from contextvars import ContextVar
 from pathlib import Path
 from uuid import uuid4
@@ -25,7 +26,7 @@ from app.ocr_pipeline import (
     read_document,
     save_settings,
 )
-from app.schemas import ClientIn, DeviceIn, InstrumentIn, JobIn, LoginIn, RowIn, SaveIn, SettingsIn, TabletIn, UserIn
+from app.schemas import ClientIn, DeviceIn, ExportLinkIn, InstrumentIn, JobIn, LoginIn, RowIn, SaveIn, SettingsIn, TabletIn, UserIn
 from app.seal import save_seal
 from app.seed import seed
 
@@ -92,6 +93,19 @@ app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
 
 _actor: ContextVar[dict | None] = ContextVar("actor", default=None)
 PUBLIC_API = {"/api/login", "/api/logout", "/api/device", "/api/license/check"}
+EXPORT_KINDS = {"blank.pdf", "export.xlsx", "export.pdf", "export.csv"}
+EXPORT_LINK_TTL = 600
+_export_links: dict[str, dict] = {}
+
+
+def _api_is_public(path: str) -> bool:
+    return path in PUBLIC_API or path.startswith("/api/export/")
+
+
+def _prune_export_links() -> None:
+    now = time.time()
+    for token in [key for key, item in _export_links.items() if item["expires"] < now]:
+        _export_links.pop(token, None)
 
 
 def db_session() -> Session:
@@ -135,7 +149,7 @@ def _user_from_token(token: str) -> dict | None:
 @app.middleware("http")
 async def require_sign_in(request: Request, call_next):
     user = None
-    if request.url.path.startswith("/api/") and request.url.path not in PUBLIC_API:
+    if request.url.path.startswith("/api/") and not _api_is_public(request.url.path):
         token = request.cookies.get("ie_session", "")
         user = _user_from_token(token) if token else None
         if user is None:
@@ -847,48 +861,88 @@ def download_upload(upload_id: int):
         return FileResponse(path, filename=upload.filename)
 
 
+def _export_response(kind: str, job_id: int, scope: str, page: int | None, work_area: str | None) -> Response:
+    job, rows, instruments = _scoped(job_id, scope, page, work_area)
+    stem = _file_stem(job, scope)
+    if kind == "export.csv":
+        return Response(
+            build_csv(job, rows, instruments),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{stem}-inspection.csv"'},
+        )
+    if kind == "export.xlsx":
+        return Response(
+            build_xlsx(job, rows, instruments),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{stem}-inspection.xlsx"'},
+        )
+    if kind == "export.pdf":
+        content = build_pdf(job, rows, instruments, blank_measurements=False, seal_path=_job_seal(job_id))
+        return Response(
+            content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{stem}-inspection.pdf"'},
+        )
+    if kind == "blank.pdf":
+        content = build_pdf(job, rows, instruments, blank_measurements=False, seal_path=_job_seal(job_id))
+        return Response(
+            content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{stem}-report.pdf"'},
+        )
+    raise HTTPException(status_code=400, detail="Unknown export type.")
+
+
+@app.post("/api/jobs/{job_id}/export-link")
+def create_export_link(job_id: int, body: ExportLinkIn):
+    load_user = actor()
+    if body.kind not in EXPORT_KINDS:
+        raise HTTPException(status_code=400, detail="Unknown export type.")
+    if body.scope not in {"job", "page", "area"}:
+        raise HTTPException(status_code=400, detail="Scope must be job, page, or area.")
+    with db_session() as session:
+        load_job(session, job_id)
+    _prune_export_links()
+    token = secrets.token_urlsafe(32)
+    _export_links[token] = {
+        "job_id": job_id,
+        "kind": body.kind,
+        "scope": body.scope,
+        "page": body.page,
+        "work_area": body.work_area or None,
+        "expires": time.time() + EXPORT_LINK_TTL,
+        "user_id": load_user["id"],
+    }
+    return {"path": f"/api/export/{token}", "expires_in": EXPORT_LINK_TTL}
+
+
+@app.get("/api/export/{token}")
+def export_by_token(token: str):
+    _prune_export_links()
+    entry = _export_links.pop(token, None)
+    if not entry or entry["expires"] < time.time():
+        raise HTTPException(status_code=404, detail="This download link expired. Tap Save again.")
+    return _export_response(entry["kind"], entry["job_id"], entry["scope"], entry.get("page"), entry.get("work_area"))
+
+
 @app.get("/api/jobs/{job_id}/export.csv")
 def export_csv(job_id: int, scope: str = "job", page: int | None = None, work_area: str | None = None):
-    job, rows, instruments = _scoped(job_id, scope, page, work_area)
-    content = build_csv(job, rows, instruments)
-    return Response(
-        content,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{_file_stem(job, scope)}-inspection.csv"'},
-    )
+    return _export_response("export.csv", job_id, scope, page, work_area)
 
 
 @app.get("/api/jobs/{job_id}/export.xlsx")
 def export_xlsx(job_id: int, scope: str = "job", page: int | None = None, work_area: str | None = None):
-    job, rows, instruments = _scoped(job_id, scope, page, work_area)
-    content = build_xlsx(job, rows, instruments)
-    return Response(
-        content,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{_file_stem(job, scope)}-inspection.xlsx"'},
-    )
+    return _export_response("export.xlsx", job_id, scope, page, work_area)
 
 
 @app.get("/api/jobs/{job_id}/export.pdf")
 def export_pdf(job_id: int, scope: str = "job", page: int | None = None, work_area: str | None = None):
-    job, rows, instruments = _scoped(job_id, scope, page, work_area)
-    content = build_pdf(job, rows, instruments, blank_measurements=False, seal_path=_job_seal(job_id))
-    return Response(
-        content,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{_file_stem(job, scope)}-inspection.pdf"'},
-    )
+    return _export_response("export.pdf", job_id, scope, page, work_area)
 
 
 @app.get("/api/jobs/{job_id}/blank.pdf")
 def blank_pdf(job_id: int, scope: str = "job", page: int | None = None, work_area: str | None = None):
-    job, rows, instruments = _scoped(job_id, scope, page, work_area)
-    content = build_pdf(job, rows, instruments, blank_measurements=False, seal_path=_job_seal(job_id))
-    return Response(
-        content,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{_file_stem(job, scope)}-report.pdf"'},
-    )
+    return _export_response("blank.pdf", job_id, scope, page, work_area)
 
 
 def _job_seal(job_id: int) -> str | None:
