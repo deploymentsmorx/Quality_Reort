@@ -19,6 +19,7 @@ const state = {
   uploadPurpose: "report",
   uploadTarget: "current",
   device: null,
+  downloadExport: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -442,17 +443,69 @@ function offerTabletDownload(relativeUrl, fullUrl, filename) {
     toast("Download started…");
     return;
   }
-  const frame = document.createElement("iframe");
-  frame.setAttribute("aria-hidden", "true");
-  frame.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden";
-  frame.src = relativeUrl;
-  document.body.appendChild(frame);
-  setTimeout(() => frame.remove(), 180000);
-  const link = $("downloadLink");
-  link.href = fullUrl;
-  link.download = filename;
-  link.textContent = `Save ${filename}`;
+  state.downloadExport = { path: relativeUrl, filename, fullUrl };
+  $("downloadSave").textContent = `Save ${filename}`;
+  $("downloadSave").disabled = false;
   $("downloadDialog").showModal();
+}
+
+async function saveExportFromTap() {
+  const job = state.downloadExport;
+  if (!job?.path) return;
+  const bridge = window.Android || window.IEAndroid || window.SmorxDevice;
+  $("downloadSave").disabled = true;
+  try {
+    const response = await fetch(job.path, { credentials: "include" });
+    if (!response.ok) {
+      let message = response.statusText;
+      try {
+        const body = await response.json();
+        message = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      } catch (_error) {
+        /* keep status text */
+      }
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const type = blob.type || (job.filename.endsWith(".pdf") ? "application/pdf" : "application/octet-stream");
+    if (bridge && typeof bridge.saveFile === "function") {
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+      bridge.saveFile(base64, job.filename, type);
+      $("downloadDialog").close();
+      toast(`Saved ${job.filename}`);
+      return;
+    }
+    const file = new File([blob], job.filename, { type });
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: job.filename });
+      $("downloadDialog").close();
+      toast(`Shared ${job.filename}`);
+      return;
+    }
+    const blobUrl = URL.createObjectURL(blob);
+    if (job.filename.endsWith(".pdf")) {
+      window.open(blobUrl, "_blank", "noopener");
+    }
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = job.filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 120000);
+    $("downloadDialog").close();
+    toast(job.filename.endsWith(".pdf") ? "PDF opened — use Save on screen if needed." : `Saved ${job.filename}`);
+  } catch (error) {
+    toast(error.message);
+    if (job.fullUrl) window.location.assign(job.fullUrl);
+  } finally {
+    $("downloadSave").disabled = false;
+  }
 }
 
 async function download(path, fallback) {
@@ -692,6 +745,7 @@ function wire() {
   $("uploadNewBtn").addEventListener("click", () => openUpload("report", "new"));
   $("uploadCancel").addEventListener("click", () => $("uploadDialog").close());
   $("downloadClose").addEventListener("click", () => $("downloadDialog").close());
+  $("downloadSave").addEventListener("click", () => saveExportFromTap().catch((error) => toast(error.message)));
   $("uploadForm").addEventListener("submit", submitUpload);
   $("uploadFile").addEventListener("change", () => {
     const file = $("uploadFile").files[0];

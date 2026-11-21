@@ -368,13 +368,15 @@ dialog label { margin-bottom: 0.55rem; }
 dialog input { width: 100%; }
 .hint { color: var(--muted); font-size: 0.84rem; line-height: 1.4; margin-top: 0; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 0.4rem; margin-top: 0.4rem; }
-a.download-link {
+.download-link {
   display: inline-block;
   text-align: center;
   text-decoration: none;
   padding: 0.55rem 1rem;
   width: 100%;
   box-sizing: border-box;
+  font-size: 1rem;
+  cursor: pointer;
 }
 .drop {
   border: 1px dashed var(--teal);
