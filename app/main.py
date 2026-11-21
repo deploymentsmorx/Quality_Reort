@@ -184,7 +184,10 @@ def _clean_member_role(role: str) -> str:
 
 @app.get("/")
 def index():
-    return FileResponse(FRONTEND / "index.html")
+    return FileResponse(
+        FRONTEND / "index.html",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 @app.get("/api/status")

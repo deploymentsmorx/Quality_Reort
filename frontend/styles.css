@@ -368,15 +368,24 @@ dialog label { margin-bottom: 0.55rem; }
 dialog input { width: 100%; }
 .hint { color: var(--muted); font-size: 0.84rem; line-height: 1.4; margin-top: 0; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 0.4rem; margin-top: 0.4rem; }
-.download-link {
-  display: inline-block;
+.download-link,
+#downloadSave {
+  display: block;
   text-align: center;
   text-decoration: none;
-  padding: 0.55rem 1rem;
+  padding: 0.85rem 1rem;
   width: 100%;
   box-sizing: border-box;
-  font-size: 1rem;
+  font-size: 1.05rem;
+  font-weight: 600;
   cursor: pointer;
+  background: var(--teal);
+  border: 1px solid var(--teal-dark);
+  color: #fff;
+  border-radius: 4px;
+}
+#downloadSave:disabled {
+  opacity: 0.65;
 }
 .drop {
   border: 1px dashed var(--teal);
