@@ -493,13 +493,8 @@ function offerTabletDownload(tokenUrl, filename) {
   $("downloadSave").textContent = `Save ${filename}`;
   $("downloadSave").disabled = false;
   $("downloadSave").hidden = false;
-  if (filename.endsWith(".pdf")) {
-    $("downloadHelp").textContent =
-      "Tap Save below — Samsung Share should open. Pick My Files or Save to Downloads. If a PDF opens instead, use ⋮ → Download or Save.";
-  } else {
-    $("downloadHelp").textContent =
-      "Tap Save below — Share should open with the Excel file. Pick My Files → Download or Save to Downloads.";
-  }
+  $("downloadHelp").textContent =
+    "Tap Save. The file opens or Samsung shows a download. Use ⋮ → Download or Save if it opens on screen, then press Back to return here. Check My Files → Download.";
   $("downloadDialog").showModal();
 }
 
@@ -571,33 +566,19 @@ async function deliverExportBlob(blob, filename) {
   toast(`Saved ${filename} — check My Files → Download`);
 }
 
-async function saveExportFromTap() {
+function saveExportFromTap() {
   const job = state.downloadExport;
-  if (!job?.path && !job?.tokenUrl && !job?.fullUrl) return;
-  $("downloadSave").disabled = true;
-  $("downloadHelp").textContent = "Preparing file…";
-  try {
-    const url = job.tokenUrl || job.fullUrl || job.path;
-    const response = await fetch(url, { credentials: job.tokenUrl || job.fullUrl ? "omit" : "include" });
-    if (!response.ok) {
-      let message = response.statusText;
-      try {
-        const body = await response.json();
-        message = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-      } catch (_error) {
-        /* keep status text */
-      }
-      throw new Error(message);
-    }
-    const blob = await response.blob();
-    const filename = filenameFromDisposition(response.headers.get("content-disposition"), job.filename);
-    await deliverExportBlob(blob, filename);
-  } catch (error) {
-    toast(error.message);
+  const url = job?.tokenUrl || job?.fullUrl || job?.path;
+  if (!url) return;
+  const bridge = window.Android || window.IEAndroid || window.SmorxDevice;
+  if (bridge && typeof bridge.downloadUrl === "function") {
+    bridge.downloadUrl(url);
+    toast("Download started…");
     $("downloadDialog").close();
-  } finally {
-    $("downloadSave").disabled = false;
+    return;
   }
+  // Navigate in the same tap. Waiting for fetch first makes Samsung ignore Share and downloads.
+  window.location.assign(url);
 }
 
 async function download(path, fallback) {
