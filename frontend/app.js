@@ -758,9 +758,32 @@ function wire() {
   });
 }
 
+function nativeDeviceFromApk() {
+  try {
+    const bridge = window.Android || window.IEAndroid || window.SmorxDevice;
+    if (!bridge) return null;
+    if (typeof bridge.getDeviceInfo === "function") {
+      const raw = bridge.getDeviceInfo();
+      return typeof raw === "string" ? JSON.parse(raw) : raw;
+    }
+    const serial = typeof bridge.getSerial === "function" ? bridge.getSerial() : "";
+    const model = typeof bridge.getModel === "function" ? bridge.getModel() : "";
+    if (!serial && !model) return null;
+    return {
+      device_id: serial || model,
+      serial,
+      device_name: typeof bridge.getDeviceName === "function" ? bridge.getDeviceName() : "Tablet",
+      model,
+      platform: "Android",
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
 async function detectDevice() {
   try {
-    const device = await api("/api/device");
+    const device = nativeDeviceFromApk() || (await api("/api/device"));
     state.device = device;
     $("deviceLine").textContent = `This device: ${device.device_name} · ${device.device_id}`;
     const check = await api("/api/license/check", {

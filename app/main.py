@@ -247,11 +247,19 @@ def _license_block(session: Session, user: User, device: DeviceIn) -> str | None
     tablets = session.scalars(select(Tablet).where(Tablet.client_id == user.client_id)).all()
     if not tablets:
         return None
+    approved = [tablet for tablet in tablets if tablet.status == "approved"]
     found = _tablet_for_device(session, device)
     if found and found.client_id == user.client_id and found.status == "approved":
         return None
     if found and found.client_id == user.client_id and found.status == "pending":
         return "This tablet matches. Waiting for the super admin to approve it."
+    # WebView calls GET /api/device on the server and may send the host id instead of the tablet serial.
+    if len(approved) == 1 and (found is None or found.client_id != user.client_id):
+        host_id = _norm_device(_host_device()["device_id"])
+        sent = {_norm_device(device.device_id), _norm_device(device.serial)}
+        sent.discard("")
+        if sent & {host_id, _norm_device(approved[0].device_id)}:
+            return None
     return "This tablet is not approved. The super admin has to approve it before this login can be used."
 
 
