@@ -24,6 +24,14 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+function reloadApp() {
+  const stamp = Date.now();
+  const next = new URL(window.location.href);
+  next.searchParams.set("_r", String(stamp));
+  next.hash = "";
+  window.location.replace(next.pathname + next.search);
+}
+
 function toast(message) {
   const node = $("toast");
   node.textContent = message;
@@ -1115,6 +1123,8 @@ async function renderUsers() {
 }
 
 wire();
+$("reloadAppBtn").addEventListener("click", reloadApp);
+$("reloadAppTopBtn").addEventListener("click", reloadApp);
 $("loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;

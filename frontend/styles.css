@@ -52,6 +52,7 @@ button:disabled { opacity: 0.55; cursor: wait; }
   place-items: center;
   padding: 1.5rem;
 }
+.login-extra { margin: 0.4rem 0 0; text-align: center; }
 #loginScreen[hidden], #app[hidden] { display: none; }
 .login-card {
   width: min(22rem, 100%);
