@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>IE Inspection</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@450;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=12" />
+</head>
+<body>
+  <div id="loginScreen">
+    <form id="loginForm" class="login-card" autocomplete="on">
+      <span class="mark">IE</span>
+      <h1>IE Inspection</h1>
+      <p class="hint" id="licenseNote">Checking this device.</p>
+      <p id="deviceLine" class="device-line"></p>
+      <div id="loginFields">
+        <label>Username <input name="username" autocomplete="username" required /></label>
+        <label>Password <input name="password" type="password" autocomplete="current-password" required /></label>
+        <button type="submit" class="solid">Sign in</button>
+      </div>
+      <p id="loginError" class="hint" hidden></p>
+      <p class="powered">powered by <a href="https://smorx.ai" target="_blank" rel="noopener">smorx.ai</a></p>
+    </form>
+  </div>
+  <div id="app" hidden>
+  <header class="top">
+    <div class="brand">
+      <span class="mark">IE</span>
+      <div>
+        <strong>IE Inspection</strong>
+      </div>
+    </div>
+    <div class="pills" id="pills"></div>
+    <div class="top-actions">
+      <span id="who" class="who"></span>
+      <button type="button" id="clientsBtn" hidden>Clients</button>
+      <button type="button" id="usersBtn" hidden>Users</button>
+      <button type="button" id="gagesBtn">Gages</button>
+      <button type="button" id="settingsBtn" hidden>Settings</button>
+      <button type="button" id="signOutBtn">Sign out</button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside>
+      <div class="aside-bar">
+        <button type="button" id="newJobBtn" class="solid">New job</button>
+        <button type="button" id="uploadNewBtn">Upload report</button>
+      </div>
+      <input id="jobSearch" type="search" placeholder="Find job or part" aria-label="Find job or part" />
+      <ul id="jobList"></ul>
+    </aside>
+
+    <main>
+      <p class="empty" id="emptyState">Open a job, or upload a CTQ inspection report. OCR reads the pen values and checks each one against Dim ± Tol.</p>
+
+      <div id="work" hidden>
+        <form id="jobForm" class="ctq-head" autocomplete="off">
+          <div class="ctq-top">
+            <input name="company_name" class="ctq-company" aria-label="Company" />
+            <label class="ctq-doc">Doc No: <input name="doc_number" aria-label="Doc No" /></label>
+          </div>
+          <div class="ctq-grid">
+            <span>Inspection report :</span>
+            <span class="ctq-fixed">CTQ Inspection report</span>
+            <span>Part name :</span>
+            <input name="part_name" aria-label="Part name" />
+            <span>Customer :</span>
+            <input name="customer" aria-label="Customer" />
+            <span>Date :</span>
+            <input name="report_date" aria-label="Date" />
+            <span>Drawing Number :</span>
+            <input name="drawing_number" aria-label="Drawing Number" />
+            <span>Sl no :</span>
+            <input name="serial_number" aria-label="Sl no" />
+          </div>
+          <label class="ctq-reportno">Report no <input name="job_number" required /></label>
+        </form>
+
+        <div class="toolbar">
+          <label>Page
+            <select id="pageFilter"></select>
+          </label>
+          <label>Work area
+            <select id="areaFilter"></select>
+          </label>
+          <label>Export
+            <select id="scope">
+              <option value="job">This job</option>
+              <option value="page">This page</option>
+              <option value="area">This work area</option>
+            </select>
+          </label>
+          <span class="spacer"></span>
+          <button type="button" id="addRowBtn">Add row</button>
+          <button type="button" id="checkBtn">Check entries</button>
+          <button type="button" id="saveBtn" class="solid">Save report data</button>
+        </div>
+
+        <div class="toolbar second">
+          <button type="button" id="blankBtn" class="solid">Download PDF</button>
+          <button type="button" id="xlsxBtn" class="solid">Download Excel</button>
+          <button type="button" id="deleteJobBtn" class="quiet">Delete job</button>
+        </div>
+
+        <div class="legend" aria-label="Review colours">
+          <span class="swatch pass">In range</span>
+          <span class="swatch boundary">On limit</span>
+          <span class="swatch fail">Out of range</span>
+          <span class="swatch missed">Missed</span>
+          <span class="counts" id="counts"></span>
+        </div>
+
+        <section id="ocrSummary" class="summary" hidden></section>
+
+        <div class="grid-wrap">
+          <table id="grid">
+            <thead>
+              <tr>
+                <th>Sl no</th>
+                <th>Parameter Description</th>
+                <th>Dim</th>
+                <th>Tol</th>
+                <th>Instrument Used</th>
+                <th>Actual (T/W)</th>
+                <th>Actual (F/W)</th>
+                <th>Result</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="gridBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <datalist id="instrumentNames"></datalist>
+  <datalist id="instrumentIds"></datalist>
+
+  <dialog id="jobDialog">
+    <form method="dialog" id="jobDialogForm">
+      <h2>New job</h2>
+      <label>Job number <input name="job_number" placeholder="IE-1044" /></label>
+      <label>Part number <input name="part_number" /></label>
+      <label>Part name <input name="part_name" /></label>
+      <label>Revision <input name="revision" /></label>
+      <div class="dialog-actions">
+        <button type="button" id="jobCancel">Cancel</button>
+        <button type="submit" class="solid">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="uploadDialog">
+    <form id="uploadForm">
+      <h2 id="uploadTitle">Upload inspection report</h2>
+      <p class="hint" id="uploadHint">Upload the filled CTQ table. Printed Sl no, Dim, Tol, and Instrument stay as printed. Pen in Actual (T/W) and Actual (F/W) is read. Unclear pen stays blank.</p>
+      <label class="drop" id="dropZone">
+        <input id="uploadFile" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff,application/pdf,image/*" />
+        <span id="dropLabel">Drop a PDF or photo here, or click to choose</span>
+      </label>
+      <label class="checkline"><input type="checkbox" id="replaceValues" /> Replace values already typed</label>
+      <div class="dialog-actions">
+        <button type="button" id="uploadCancel">Cancel</button>
+        <button type="submit" class="solid" id="uploadSubmit">Read and fill</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settingsDialog">
+    <form id="settingsForm">
+      <h2>Settings</h2>
+      <label>Anthropic API key
+        <input name="anthropic_api_key" type="password" autocomplete="off" placeholder="sk-ant-…" />
+      </label>
+      <label>Model
+        <input name="anthropic_model" value="claude-sonnet-5-5" />
+      </label>
+      <div class="dialog-actions">
+        <button type="button" id="settingsClose">Close</button>
+        <button type="submit" class="solid">Save key</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="gageDialog">
+    <form id="gageForm">
+      <h2>Gages</h2>
+      <p class="hint">These fill the Instrument Used list. A typed value is kept even when it is outside the gage range.</p>
+      <div id="gageList"></div>
+      <div class="gage-add">
+        <input name="name" placeholder="Name" required />
+        <input name="asset_id" placeholder="Instr. ID" />
+        <input name="range_min" placeholder="Min" inputmode="decimal" />
+        <input name="range_max" placeholder="Max" inputmode="decimal" />
+        <input name="unit" placeholder="mm" value="mm" />
+        <button type="submit" class="solid">Add</button>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="gageClose">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="clientsDialog">
+    <h2>Clients</h2>
+    <p class="hint">The user and their tablet are saved together. Add another device only when the same user has a second tablet.</p>
+    <div id="clientList" class="access-list"></div>
+    <form id="clientForm" class="client-card">
+      <strong>New client</strong>
+      <div class="bind-row">
+        <span class="bind-label">User</span>
+        <div class="bind-fields">
+          <input name="name" placeholder="Client name" required />
+          <input name="admin_name" placeholder="User name" />
+          <input name="admin_username" placeholder="Username" required />
+          <input name="admin_password" type="password" placeholder="Password" required />
+        </div>
+      </div>
+      <div class="bind-row">
+        <span class="bind-label">Device</span>
+        <div class="bind-fields">
+          <input name="device_name" placeholder="Device name" />
+          <input name="device_model" placeholder="Model" />
+          <input name="device_serial" placeholder="Serial number" />
+          <button type="submit" class="solid">Add</button>
+        </div>
+      </div>
+    </form>
+    <div class="dialog-actions">
+      <button type="button" id="clientsClose">Close</button>
+    </div>
+  </dialog>
+
+  <dialog id="usersDialog">
+    <form id="userForm">
+      <h2>Users</h2>
+      <p class="hint">Add people for this client. Each person signs in with their own username.</p>
+      <div id="userList" class="access-list"></div>
+      <div class="access-add">
+        <input name="display_name" placeholder="Name" />
+        <input name="username" placeholder="Username" required />
+        <input name="password" type="password" placeholder="Password" required />
+        <select name="role" id="roleSelect">
+          <option value="quality">Quality</option>
+          <option value="engineer">Engineer</option>
+          <option value="production">Production</option>
+          <option value="operation">Operation</option>
+          <option value="process">Process</option>
+          <option value="other">Other</option>
+        </select>
+        <input name="custom_role" id="customRole" placeholder="Role name" hidden />
+        <button type="submit" class="solid">Add user</button>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" id="usersClose">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status"></div>
+  </div>
+  <script src="/static/app.js?v=19"></script>
+</body>
+</html>
