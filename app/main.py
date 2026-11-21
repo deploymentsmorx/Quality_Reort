@@ -925,7 +925,18 @@ def create_export_link(job_id: int, body: ExportLinkIn):
         "expires": time.time() + EXPORT_LINK_TTL,
         "user_id": load_user["id"],
     }
-    return {"path": f"/api/export/{token}", "expires_in": EXPORT_LINK_TTL}
+    names = {
+        "export.pdf": "report.pdf",
+        "blank.pdf": "report.pdf",
+        "export.xlsx": "inspection.xlsx",
+        "export.csv": "inspection.csv",
+    }
+    return {"path": f"/api/export/{token}/{names[body.kind]}", "expires_in": EXPORT_LINK_TTL}
+
+
+@app.get("/api/export/{token}/{filename}")
+def export_by_token_named(token: str, filename: str):
+    return export_by_token(token)
 
 
 @app.get("/api/export/{token}")
