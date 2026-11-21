@@ -474,8 +474,8 @@ def approve_tablet(tablet_id: int):
         tablet = session.get(Tablet, tablet_id)
         if not tablet:
             raise HTTPException(status_code=404, detail="Tablet not found.")
-        if tablet.status == "registered":
-            raise HTTPException(status_code=400, detail="This tablet has not checked in yet.")
+        if tablet.status == "approved":
+            raise HTTPException(status_code=400, detail="This tablet is already approved.")
         tablet.status = "approved"
         session.commit()
         client = session.get(Client, tablet.client_id)

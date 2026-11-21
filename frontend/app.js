@@ -1085,7 +1085,7 @@ async function renderClients() {
       value.style.gridColumn = "1 / span 3";
       const actions = document.createElement("div");
       actions.className = "access-actions";
-      if (tablet.status === "pending") {
+      if (tablet.status === "registered" || tablet.status === "pending") {
         const approve = document.createElement("button");
         approve.type = "button";
         approve.className = "solid";
@@ -1217,8 +1217,8 @@ $("signOutBtn").addEventListener("click", async () => {
   showLogin();
 });
 const TABLET_STATUS = {
-  registered: "Waiting for the tablet",
-  pending: "Needs approval",
+  registered: "Not approved yet",
+  pending: "Tablet checked in — approve",
   approved: "Approved",
 };
 
