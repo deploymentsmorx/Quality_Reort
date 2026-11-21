@@ -495,10 +495,10 @@ function offerTabletDownload(tokenUrl, filename) {
   $("downloadSave").hidden = false;
   if (filename.endsWith(".pdf")) {
     $("downloadHelp").textContent =
-      "Tap Save below. If Share opens, choose My Files → Download. If the PDF opens on screen, use the menu (⋮) → Download or Save.";
+      "Tap Save below — Samsung Share should open. Pick My Files or Save to Downloads. If a PDF opens instead, use ⋮ → Download or Save.";
   } else {
     $("downloadHelp").textContent =
-      "Tap Save below. When Share opens, pick Save to My Files or Downloads. Then open the My Files app → Download folder.";
+      "Tap Save below — Share should open with the Excel file. Pick My Files → Download or Save to Downloads.";
   }
   $("downloadDialog").showModal();
 }
@@ -511,31 +511,74 @@ function showPdfSaveHelp(filename) {
   toast(`Open My Files → Download to see ${filename}`);
 }
 
+function filenameFromDisposition(header, fallback) {
+  const match = String(header || "").match(/filename="([^"]+)"/);
+  return match ? match[1] : fallback;
+}
+
+async function deliverExportBlob(blob, filename) {
+  const bridge = window.Android || window.IEAndroid || window.SmorxDevice;
+  const type =
+    blob.type ||
+    (filename.endsWith(".pdf")
+      ? "application/pdf"
+      : filename.endsWith(".xlsx")
+        ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        : "application/octet-stream");
+  if (bridge && typeof bridge.saveFile === "function") {
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+    bridge.saveFile(base64, filename, type);
+    $("downloadDialog").close();
+    toast(`Saved ${filename}`);
+    return;
+  }
+  const file = new File([blob], filename, { type });
+  if (navigator.share) {
+    try {
+      if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: filename });
+        $("downloadHelp").textContent =
+          "If you picked My Files or Downloads, open the My Files app and check the Download folder.";
+        $("downloadSave").hidden = false;
+        toast("Saved — open My Files → Download");
+        return;
+      }
+    } catch (shareError) {
+      if (shareError?.name === "AbortError") return;
+    }
+  }
+  const blobUrl = URL.createObjectURL(blob);
+  const isPdf = filename.endsWith(".pdf");
+  if (isPdf) {
+    window.open(blobUrl, "_blank", "noopener");
+    showPdfSaveHelp(filename);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 300000);
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = blobUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 120000);
+  $("downloadDialog").close();
+  toast(`Saved ${filename} — check My Files → Download`);
+}
+
 async function saveExportFromTap() {
   const job = state.downloadExport;
-  if (!job?.path && !job?.tokenUrl) return;
-  const bridge = window.Android || window.IEAndroid || window.SmorxDevice;
+  if (!job?.path && !job?.tokenUrl && !job?.fullUrl) return;
   $("downloadSave").disabled = true;
+  $("downloadHelp").textContent = "Preparing file…";
   try {
-    if (job.tokenUrl) {
-      const iframe = document.createElement("iframe");
-      iframe.setAttribute("aria-hidden", "true");
-      iframe.style.cssText = "position:fixed;left:-9999px;width:1px;height:1px;border:0";
-      iframe.src = job.tokenUrl;
-      document.body.appendChild(iframe);
-      const link = document.createElement("a");
-      link.href = job.tokenUrl;
-      link.download = job.filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      setTimeout(() => iframe.remove(), 120000);
-      $("downloadHelp").textContent =
-        "Wait 10–20 seconds, then open My Files → Download. If empty, use Chrome: sign in to the same site and download again.";
-      toast("Saving — check My Files → Download");
-      return;
-    }
-    const response = await fetch(job.path, { credentials: "include" });
+    const url = job.tokenUrl || job.fullUrl || job.path;
+    const response = await fetch(url, { credentials: job.tokenUrl || job.fullUrl ? "omit" : "include" });
     if (!response.ok) {
       let message = response.statusText;
       try {
@@ -547,51 +590,8 @@ async function saveExportFromTap() {
       throw new Error(message);
     }
     const blob = await response.blob();
-    const type = blob.type || (job.filename.endsWith(".pdf") ? "application/pdf" : "application/octet-stream");
-    if (bridge && typeof bridge.saveFile === "function") {
-      const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(blob);
-      });
-      bridge.saveFile(base64, job.filename, type);
-      $("downloadDialog").close();
-      toast(`Saved ${job.filename}`);
-      return;
-    }
-    const file = new File([blob], job.filename, { type });
-    if (navigator.share) {
-      try {
-        if (navigator.canShare?.({ files: [file] })) {
-          await navigator.share({ files: [file], title: job.filename });
-          $("downloadHelp").textContent =
-            "If you picked My Files or Downloads, open the My Files app and check the Download folder.";
-          $("downloadSave").hidden = false;
-          toast("Saved — open My Files → Download");
-          return;
-        }
-      } catch (shareError) {
-        if (shareError?.name === "AbortError") return;
-      }
-    }
-    const blobUrl = URL.createObjectURL(blob);
-    const isPdf = job.filename.endsWith(".pdf");
-    if (isPdf) {
-      window.open(blobUrl, "_blank", "noopener");
-      showPdfSaveHelp(job.filename);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 300000);
-      return;
-    }
-    const link = document.createElement("a");
-    link.href = blobUrl;
-    link.download = job.filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 120000);
-    $("downloadDialog").close();
-    toast(`Saved ${job.filename} — check My Files → Download`);
+    const filename = filenameFromDisposition(response.headers.get("content-disposition"), job.filename);
+    await deliverExportBlob(blob, filename);
   } catch (error) {
     toast(error.message);
     $("downloadDialog").close();
