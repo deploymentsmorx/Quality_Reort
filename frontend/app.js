@@ -483,7 +483,23 @@ function offerTabletDownload(relativeUrl, fullUrl, filename) {
   state.downloadExport = { path: relativeUrl, filename, fullUrl };
   $("downloadSave").textContent = `Save ${filename}`;
   $("downloadSave").disabled = false;
+  $("downloadSave").hidden = false;
+  if (filename.endsWith(".pdf")) {
+    $("downloadHelp").textContent =
+      "Tap Save below. If Share opens, choose My Files → Download. If the PDF opens on screen, use the menu (⋮) → Download or Save.";
+  } else {
+    $("downloadHelp").textContent =
+      "Tap Save below. When Share opens, pick Save to My Files or Downloads. Then open the My Files app → Download folder.";
+  }
   $("downloadDialog").showModal();
+}
+
+function showPdfSaveHelp(filename) {
+  $("downloadHelp").innerHTML =
+    "<strong>PDF is on screen</strong> (not saved yet). On that screen tap <strong>⋮</strong> (menu) → <strong>Download</strong> or <strong>Save</strong>. " +
+    "Find it in <strong>My Files → Download</strong> or <strong>Documents</strong>.";
+  $("downloadSave").hidden = true;
+  toast(`Open My Files → Download to see ${filename}`);
 }
 
 async function saveExportFromTap() {
@@ -518,15 +534,27 @@ async function saveExportFromTap() {
       return;
     }
     const file = new File([blob], job.filename, { type });
-    if (navigator.share && navigator.canShare?.({ files: [file] })) {
-      await navigator.share({ files: [file], title: job.filename });
-      $("downloadDialog").close();
-      toast(`Shared ${job.filename}`);
-      return;
+    if (navigator.share) {
+      try {
+        if (navigator.canShare?.({ files: [file] })) {
+          await navigator.share({ files: [file], title: job.filename });
+          $("downloadHelp").textContent =
+            "If you picked My Files or Downloads, open the My Files app and check the Download folder.";
+          $("downloadSave").hidden = false;
+          toast("Saved — open My Files → Download");
+          return;
+        }
+      } catch (shareError) {
+        if (shareError?.name === "AbortError") return;
+      }
     }
     const blobUrl = URL.createObjectURL(blob);
-    if (job.filename.endsWith(".pdf")) {
+    const isPdf = job.filename.endsWith(".pdf");
+    if (isPdf) {
       window.open(blobUrl, "_blank", "noopener");
+      showPdfSaveHelp(job.filename);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 300000);
+      return;
     }
     const link = document.createElement("a");
     link.href = blobUrl;
@@ -536,7 +564,7 @@ async function saveExportFromTap() {
     link.remove();
     setTimeout(() => URL.revokeObjectURL(blobUrl), 120000);
     $("downloadDialog").close();
-    toast(job.filename.endsWith(".pdf") ? "PDF opened — use Save on screen if needed." : `Saved ${job.filename}`);
+    toast(`Saved ${job.filename} — check My Files → Download`);
   } catch (error) {
     toast(error.message);
     $("downloadDialog").close();
