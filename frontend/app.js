@@ -431,6 +431,30 @@ function downloadNeedsDirectOpen() {
   return /Android/i.test(ua) || /iPhone|iPad|iPod/i.test(ua) || /\bwv\b/i.test(ua);
 }
 
+function exportFileUrl(path, params) {
+  return new URL(`/api/jobs/${state.job.id}/${path}?${params.toString()}`, window.location.href).href;
+}
+
+function offerTabletDownload(relativeUrl, fullUrl, filename) {
+  const bridge = window.Android || window.IEAndroid || window.SmorxDevice;
+  if (bridge && typeof bridge.downloadUrl === "function") {
+    bridge.downloadUrl(fullUrl);
+    toast("Download started…");
+    return;
+  }
+  const frame = document.createElement("iframe");
+  frame.setAttribute("aria-hidden", "true");
+  frame.style.cssText = "position:absolute;width:0;height:0;border:0;visibility:hidden";
+  frame.src = relativeUrl;
+  document.body.appendChild(frame);
+  setTimeout(() => frame.remove(), 180000);
+  const link = $("downloadLink");
+  link.href = fullUrl;
+  link.download = filename;
+  link.textContent = `Save ${filename}`;
+  $("downloadDialog").showModal();
+}
+
 async function download(path, fallback) {
   if (!state.job?.id) throw new Error("Open a job first.");
   if (state.dirty) await saveReport();
@@ -438,14 +462,7 @@ async function download(path, fallback) {
   const url = `/api/jobs/${state.job.id}/${path}?${params.toString()}`;
 
   if (downloadNeedsDirectOpen()) {
-    const link = document.createElement("a");
-    link.href = url;
-    link.target = "_blank";
-    link.rel = "noopener";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    toast("Download started…");
+    offerTabletDownload(url, exportFileUrl(path, params), fallback);
     return;
   }
 
@@ -674,6 +691,7 @@ function wire() {
   $("xlsxBtn").addEventListener("click", () => download("export.xlsx", "inspection.xlsx").catch((error) => toast(error.message)));
   $("uploadNewBtn").addEventListener("click", () => openUpload("report", "new"));
   $("uploadCancel").addEventListener("click", () => $("uploadDialog").close());
+  $("downloadClose").addEventListener("click", () => $("downloadDialog").close());
   $("uploadForm").addEventListener("submit", submitUpload);
   $("uploadFile").addEventListener("change", () => {
     const file = $("uploadFile").files[0];
