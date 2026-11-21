@@ -427,6 +427,35 @@ function scopeParams() {
   return params;
 }
 
+function rowsForExportScope(scope, pageValue, areaValue) {
+  if (scope === "page" && pageValue !== "all") {
+    const page = Number(pageValue);
+    return state.rows.filter((row) => Number(row.page_no || 0) === page);
+  }
+  if (scope === "area" && areaValue !== "all") {
+    const target = String(areaValue).trim().toLowerCase();
+    return state.rows.filter((row) => String(row.work_area || "").trim().toLowerCase() === target);
+  }
+  return state.rows;
+}
+
+function exportDownloadParams() {
+  const scope = $("scope").value;
+  const pageValue = $("pageFilter").value;
+  const areaValue = $("areaFilter").value;
+  try {
+    if (scope === "page" && pageValue === "all") throw new Error("Choose a page in the filter, then export.");
+    if (scope === "area" && areaValue === "all") throw new Error("Choose a work area in the filter, then export.");
+    if (rowsForExportScope(scope, pageValue, areaValue).length) {
+      return scopeParams();
+    }
+    toast("No rows in that page or work area — exporting the full job.");
+  } catch (error) {
+    if (scope === "job") throw error;
+  }
+  return new URLSearchParams({ scope: "job" });
+}
+
 function downloadNeedsDirectOpen() {
   const ua = navigator.userAgent || "";
   return /Android/i.test(ua) || /iPhone|iPad|iPod/i.test(ua) || /\bwv\b/i.test(ua);
@@ -502,7 +531,7 @@ async function saveExportFromTap() {
     toast(job.filename.endsWith(".pdf") ? "PDF opened — use Save on screen if needed." : `Saved ${job.filename}`);
   } catch (error) {
     toast(error.message);
-    if (job.fullUrl) window.location.assign(job.fullUrl);
+    $("downloadDialog").close();
   } finally {
     $("downloadSave").disabled = false;
   }
@@ -510,8 +539,9 @@ async function saveExportFromTap() {
 
 async function download(path, fallback) {
   if (!state.job?.id) throw new Error("Open a job first.");
+  if (!state.rows.length) throw new Error("This job has no rows to export.");
   if (state.dirty) await saveReport();
-  const params = scopeParams();
+  const params = exportDownloadParams();
   const url = `/api/jobs/${state.job.id}/${path}?${params.toString()}`;
 
   if (downloadNeedsDirectOpen()) {
