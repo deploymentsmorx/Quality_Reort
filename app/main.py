@@ -988,8 +988,6 @@ def _job_seal(job_id: int) -> str | None:
         source = Path(upload.stored_path)
         if not source.is_file():
             return None
-        if dest.is_file() and dest.stat().st_mtime >= source.stat().st_mtime:
-            return str(dest)
         if save_seal(source, dest):
             return str(dest)
         if dest.is_file():

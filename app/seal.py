@@ -15,6 +15,7 @@ def save_seal(source: Path, dest: Path) -> bool:
     except (OSError, ValueError):
         return False
     for image in images:
+        image = _stamp_at_bottom(image)
         crop = _signature_band(image) or _seal_crop(image)
         if crop is None:
             continue
@@ -22,6 +23,18 @@ def save_seal(source: Path, dest: Path) -> bool:
         crop.save(dest, format="PNG")
         return True
     return False
+
+
+def _stamp_at_bottom(image: Image.Image) -> Image.Image:
+    """Inspection stamps sit at the bottom. A stamp in the top half means the photo is upside down."""
+    found = _stamp_box(image)
+    if found is None:
+        return image
+    _unused, box = found
+    center_y = (box[1] + box[3]) / 2
+    if center_y < image.height * 0.5:
+        return image.rotate(180, expand=True)
+    return image
 
 
 def _stamp_pixel(red: int, green: int, blue: int) -> bool:
@@ -138,13 +151,13 @@ def _signature_band(image: Image.Image) -> Image.Image | None:
     rules = [item for item in full if item[0] >= stamp_top - 6]
     if not rules:
         return None
-    rule_y, rule_left, rule_right = rules[0]
-    pad = 3
+    rule_y = rules[0][0]
+    pad = 8
     box = (
-        max(0, min(rule_left, stamp_left) - pad),
+        0,
         max(0, min(stamp_top, rule_y) - pad),
-        min(width, max(rule_right, stamp_right) + pad),
-        min(height, stamp_bottom + pad),
+        width,
+        min(height, stamp_bottom + 36),
     )
     if box[2] - box[0] < width * 0.35 or box[3] - box[1] > height * 0.28:
         return None
