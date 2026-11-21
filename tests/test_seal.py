@@ -1,6 +1,16 @@
 from app.seal import _seal_crop, draw_test_stamp
 
 
+def test_extract_keeps_ink_and_drops_the_paper():
+    from app.seal import _ink_extract
+
+    extracted = _ink_extract(draw_test_stamp())
+    assert extracted is not None
+    assert extracted.mode == "RGBA"
+    colors = extracted.getcolors(maxcolors=extracted.width * extracted.height) or []
+    assert any(len(color) == 4 and color[3] == 0 for _count, color in colors)
+
+
 def test_upside_down_page_is_turned_so_the_stamp_is_at_the_bottom():
     from app.seal import _stamp_at_bottom
 

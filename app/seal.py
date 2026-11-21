@@ -16,7 +16,7 @@ def save_seal(source: Path, dest: Path) -> bool:
         return False
     for image in images:
         image = _stamp_at_bottom(image)
-        crop = _signature_band(image) or _seal_crop(image)
+        crop = _ink_extract(image) or _seal_crop(image)
         if crop is None:
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -43,6 +43,40 @@ def _stamp_pixel(red: int, green: int, blue: int) -> bool:
     blue_ink = blue > 85 and blue - red > 28 and blue - green > 12
     red_ink = red > 145 and red - green > 45 and red - blue > 45
     return blue_ink or red_ink
+
+
+def _ink_extract(image: Image.Image) -> Image.Image | None:
+    """Keep the blue or red signature and stamp. Leave out the form lines and printed words."""
+    found = _stamp_box(image)
+    if found is None:
+        return None
+    image, (left, top, right, bottom) = found
+    width, height = image.size
+    stamp_w = max(1, right - left)
+    stamp_h = max(1, bottom - top)
+    region = (
+        max(0, left - int(stamp_w * 1.8)),
+        max(0, top - int(stamp_h * 0.35)),
+        min(width, right + int(stamp_w * 0.25)),
+        min(height, bottom + int(stamp_h * 0.2)),
+    )
+    crop = image.crop(region).convert("RGB")
+    extracted = Image.new("RGBA", crop.size, (255, 255, 255, 0))
+    source = crop.load()
+    target = extracted.load()
+    kept = 0
+    for y in range(crop.height):
+        for x in range(crop.width):
+            red, green, blue = source[x, y]
+            if _stamp_pixel(red, green, blue):
+                target[x, y] = (red, green, blue, 255)
+                kept += 1
+    if kept < 40:
+        return None
+    bounds = extracted.getbbox()
+    if bounds is None:
+        return None
+    return extracted.crop(bounds)
 
 
 def _seal_crop(image: Image.Image) -> Image.Image | None:
