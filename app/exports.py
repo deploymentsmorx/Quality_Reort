@@ -300,9 +300,9 @@ def _render_pdf(
     signature = None
     bottom = 32
     if seal_path and Path(seal_path).is_file():
-        draw_w, draw_h = _signature_draw_size(seal_path, landscape(A4)[0] - 56)
+        draw_w, draw_h = _signature_draw_size(seal_path, 280)
         signature = (seal_path, draw_w, draw_h)
-        bottom = 22 + draw_h + 12
+        bottom = 24 + max(draw_h, 64) + 10
     document = SimpleDocTemplate(
         buffer,
         pagesize=landscape(A4),
@@ -384,15 +384,22 @@ def _xml(value: str) -> str:
 def _footer(job: dict, signature: tuple | None):
     def draw(canvas, doc):
         canvas.saveState()
+        ink = colors.HexColor("#1C2430")
+        canvas.setFillColor(ink)
+        canvas.setStrokeColor(ink)
+        canvas.setFont("Helvetica", 9)
+        labels = ("Inspected By", "Approved By", "Comments")
+        for index, label in enumerate(labels):
+            y = 64 - index * 18
+            canvas.drawString(28, y, label)
+            canvas.setLineWidth(0.5)
+            canvas.line(108, y - 1, 250, y - 1)
         if signature:
             path, draw_w, draw_h = signature
-            page_w = landscape(A4)[0]
-            x = 28 + ((page_w - 56) - draw_w) / 2
-            canvas.drawImage(path, x, 22, width=draw_w, height=draw_h, preserveAspectRatio=True, mask="auto")
+            canvas.drawImage(path, 112, 46, width=draw_w, height=draw_h, preserveAspectRatio=True, mask="auto")
         canvas.setFont("Helvetica", 8)
-        canvas.setFillColor(colors.HexColor("#1C2430"))
-        canvas.drawString(28, 10, f"IE Inspection  {job.get('job_number', '')}  {job.get('part_number', '')}")
-        canvas.drawRightString(landscape(A4)[0] - 28, 10, f"Page {doc.page}")
+        canvas.drawString(28, 12, f"IE Inspection  {job.get('job_number', '')}  {job.get('part_number', '')}")
+        canvas.drawRightString(landscape(A4)[0] - 28, 12, f"Page {doc.page}")
         canvas.restoreState()
 
     return draw
